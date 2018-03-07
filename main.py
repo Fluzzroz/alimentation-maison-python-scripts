@@ -207,7 +207,7 @@ def create_data_array():
     location = pd.concat([data["latitude"], data["longitude"]], axis=1)
     location = location.values
     interest = data["interest"].values
-    area = data["streets"].values
+    area = data["door_id"].values
     return [location, interest, area]
 
 

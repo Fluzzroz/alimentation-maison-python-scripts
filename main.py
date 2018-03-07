@@ -110,7 +110,7 @@ def main():
     area = data[2]
     num_locations = len(locations)
     depot = 0  # The depot is the start and end point of each route.
-    num_vehicles = 3
+    num_vehicles = 8
 
     # Create routing model.
     if num_locations > 0:

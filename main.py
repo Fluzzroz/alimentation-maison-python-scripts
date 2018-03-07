@@ -26,6 +26,7 @@
 from ortools.constraint_solver import pywrapcp
 from ortools.constraint_solver import routing_enums_pb2
 import pandas as pd
+import numpy as np
 import math
 
 
@@ -104,7 +105,7 @@ class CreateDemandCallback(object):
 
 def main():
     # Create the data.
-    data = create_data_array()
+    data = import_data("tsp-python-import - python-inputs.csv")
     locations = data[0]
     demands = data[1]
     area = data[2]
@@ -180,7 +181,7 @@ def main():
 
 
 def create_data_array():
-    # this is testing data
+    # this is testing data; not used anymore
     raw_data = [
         [55, 45.518564, -73.583180, 7, "Saint-Laurent/Marianne", "Plateau"],
         [56, 45.517900, -73.582380, 8, "Saint-Laurent/Rachel", "Plateau"],
@@ -210,6 +211,28 @@ def create_data_array():
     area = data["area"].values
     return [location, interest, area]
 
+def import_data():
+    """imports data from specified file"""
+    #door_ID 0 must not contain a real location, it will be assigned to Home
+    df_locations = pd.read_csv("tsp-python-import - locations.csv")
+    df_meetings = pd.read_csv("tsp-python-import - meetings.csv", parse_dates=[1], infer_datetime_format=True)
+
+    #add the coordinate info to meetings
+    df_meetings = pd.merge(df_meetings, df_locations, how="left", left_on="meet_location", right_on="door_id", sort=False, validate="1:1")
+
+    #matrix, each row is a pair of coordinates
+    locations = df_meetings[["door_latitude","door_longitude"]].values
+    #add Home coordinates
+    locations = np.concatenate(([[0, 0]], locations), axis=0)
+
+
+    #maps a node to a door_id
+    node_to_door = df_meetings["meet_location"].values
+    #add the Home node
+    node_to_door = np.concatenate(([0], node_to_door))
+
+
 
 if __name__ == '__main__':
-    main()
+    data = import_data()
+    #main()

@@ -61,7 +61,7 @@ def earth_distance(lat1, long1, lat2, long2):
 
 
 def manhattan_distance(x1, y1, x2, y2):
-    # Manhattan distance
+    """Manhattan distance"""
     dist = abs(x1 - x2) + abs(y1 - y2)
     return int(dist)
 
@@ -78,8 +78,8 @@ class CreateDistanceCallback(object):
         for from_node in range(size):
             self.matrix[from_node] = {}
             for to_node in range(size):
+                # Define the distance from the depot to any node to be 0.
                 if from_node == depot or to_node == depot:
-                    # Define the distance from the depot to any node to be 0.
                     self.matrix[from_node][to_node] = 0
                 else:
                     x1 = locations[from_node][0]
@@ -88,30 +88,40 @@ class CreateDistanceCallback(object):
                     y2 = locations[to_node][1]
                     self.matrix[from_node][to_node] = earth_distance(x1, y1, x2, y2)
 
-    def Distance(self, from_node, to_node):
+    def distance(self, from_node, to_node):
         return int(self.matrix[from_node][to_node])
 
 
-# Demand callback
-class CreateDemandCallback(object):
-    """Create callback to get demands at each location."""
+# Time callback
+class CreateTimeCallback(object):
+    """Create callback to get total times between locations."""
 
-    def __init__(self, demands):
-        self.matrix = demands
+    ##the init function is probably useless and I think we just need the time#
+    #we define that all locations (meetings) last 60 minutes
+    def __init__(self):
+        self.matrix = 60
 
-    def Demand(self, from_node, to_node):
-        return self.matrix[from_node]
+    def time(self, from_node, to_node):
+        return self.matrix
 
 
 def main():
-    # Create the data.
-    data = import_data("tsp-python-import - python-inputs.csv")
+    # import data
+    data = import_data()
     locations = data[0]
-    demands = data[1]
-    area = data[2]
+    schedule = data[1]
+    skill = data[2]
+    interest = data[3]
+    node_to_door = data[4]
+    route_to_salesman = data[5]
+
     num_locations = len(locations)
-    depot = 0  # The depot is the start and end point of each route.
-    num_vehicles = 7
+    num_vehicles = len(route_to_salesman)
+
+    # depot is Home, the start point of each route for first meeting and end
+    # point after last meeting, it is defined as distance 0 to any other node
+    # In other words, Home is the salesman Home, as in: he is off the clock
+    depot = 0
 
     # Create routing model.
     if num_locations > 0:
@@ -120,119 +130,108 @@ def main():
 
         # Callback to the distance function.
         dist_between_locations = CreateDistanceCallback(locations)
-        dist_callback = dist_between_locations.Distance
+        dist_callback = dist_between_locations.distance
         routing.SetArcCostEvaluatorOfAllVehicles(dist_callback)
 
-        # Put a callback to the demands.
-        demands_at_locations = CreateDemandCallback(demands)
-        demands_callback = demands_at_locations.Demand
+        # Put a callback to the time. No argument required since we define
+        #that all meetings last for 60 minutes
+        times_at_locations = CreateTimeCallback()
+        times_callback = times_at_locations.time
 
-        # Add a dimension for demand.
-        slack_max = 0
-        vehicle_capacity = 100
-        fix_start_cumul_to_zero = True
-        demand = "Interest"
-        routing.AddDimension(demands_callback, slack_max, vehicle_capacity,
-                             fix_start_cumul_to_zero, demand)
+        # Add a dimension for time.
+        time_slack = 15
+        time_d_name = "Time"
+        vehicle_capacity = int(max(schedule) + 60)  # the 60 is to return Home
+        routing.AddDimension(times_callback, time_slack, vehicle_capacity, True, time_d_name)
+
+        #Add the time windows constraint, which is the meeting schedule
+        time_dimension = routing.GetDimensionOrDie(time_d_name)
+        for location in range(1, num_locations):
+            start = int(schedule[location] - time_slack)
+            end = int(schedule[location] + time_slack)
+            time_dimension.CumulVar(location).SetRange(start, end)
 
         # Solve, displays a solution if any.
         assignment = routing.SolveWithParameters(search_parameters)
         if assignment:
             # Display solution.
             # Solution cost.
-            print("Total distance of all routes: " + str(
-                assignment.ObjectiveValue()) + "\n")
+            print("Total distance of all routes: " + str(assignment.ObjectiveValue()) + "\n")
 
             for vehicle_nbr in range(num_vehicles):
                 index = routing.Start(vehicle_nbr)
                 index_next = assignment.Value(routing.NextVar(index))
                 route = ''
                 route_dist = 0
-                route_demand = 0
-                route_area = ''
+                route_times = ''
 
                 while not routing.IsEnd(index_next):
                     node_index = routing.IndexToNode(index)
                     node_index_next = routing.IndexToNode(index_next)
                     route += str(node_index) + " -> "
-                    route_area += str(area[node_index]) + " -> "
                     # Add the distance to the next node.
                     route_dist += dist_callback(node_index, node_index_next)
-                    # Add demand.
-                    route_demand += demands[node_index_next]
+                    # Add time-delayed based schedule
+                    route_times += str(schedule[node_index]) + " -> "
                     index = index_next
                     index_next = assignment.Value(routing.NextVar(index))
 
                 node_index = routing.IndexToNode(index)
                 node_index_next = routing.IndexToNode(index_next)
                 route += str(node_index) + " -> " + str(node_index_next)
-                route_area += str(area[node_index]) + " -> " + str(area[node_index_next])
+                route_times += str(schedule[node_index]) + " -> " + str(vehicle_capacity)
                 route_dist += dist_callback(node_index, node_index_next)
                 print("Route for Salesman " + str(vehicle_nbr) + ":\n" + route)
-                print(route_area)
-                print("Distance of Route " + str(vehicle_nbr) + ": " + str(
-                    route_dist))
-                print(demand +" met by Salesman " + str(vehicle_nbr) + ": " + str(
-                    route_demand) + "\n")
+                print(route_times)
+                print("Distance of Route " + str(vehicle_nbr) + ": " + str(route_dist))
+
         else:
             print('No solution found.')
     else:
         print('Specify an instance greater than 0.')
 
 
-def create_data_array():
-    # this is testing data; not used anymore
-    raw_data = [
-        [55, 45.518564, -73.583180, 7, "Saint-Laurent/Marianne", "Plateau"],
-        [56, 45.517900, -73.582380, 8, "Saint-Laurent/Rachel", "Plateau"],
-        [57, 45.478203, -73.568707, 1, "Charlevoix/Centre", "Sud-Ouest"],
-        [64, 45.470603, -73.568177, 3, "Caisse/Lasalle", "Sud-Ouest"],
-        [58, 45.548690, -73.587279, 2, "1st Avenue/Beaubien", "Rosemont"],
-        [59, 45.549423, -73.590423, 5, "Molson/Beaubien", "Rosemont"],
-        [60, 45.547474, -73.587774, 6, "Iberville/Bellechasse", "Rosemont"],
-        [61, 45.436459, -73.633451, 5, "Danièle/Pauline", "Lasalle"],
-        [62, 45.428341, -73.629370, 9, "Dollard/David Boyer", "Lasalle"],
-        [63, 45.422917, -73.631343, 4, "Parent/Jeté", "Lasalle"],
-    ]
-
-    #transform the test data into Pandas DataFrame because eventually, we will  import SQL from Pandas
-    data = pd.DataFrame(raw_data, columns=["door_id", "latitude", "longitude", "interest", "streets", "area"])
-
-    #adding Home: a dummy depot with 0 distance to any node, since we don't
-    # require the salesman to return to a depot
-    # consider Home as the salesman clocking in and out of his route
-    home = pd.DataFrame([[0, 0, 0, 0, "none/none", "Home"]], columns=["door_id", "latitude", "longitude", "interest", "streets", "area"])
-    data = pd.concat([home, data], axis=0, ignore_index=True)
-
-    #formatted data we will be using
-    location = pd.concat([data["latitude"], data["longitude"]], axis=1)
-    location = location.values
-    interest = data["interest"].values
-    area = data["area"].values
-    return [location, interest, area]
-
 def import_data():
     """imports data from specified file"""
-    #door_ID 0 must not contain a real location, it will be assigned to Home
+    df_salesmen = pd.read_csv("tsp-python-import - salesmen.csv")
     df_locations = pd.read_csv("tsp-python-import - locations.csv")
-    df_meetings = pd.read_csv("tsp-python-import - meetings.csv", parse_dates=[1], infer_datetime_format=True)
+    df_meetings = pd.read_csv("tsp-python-import - meetings.csv",
+                              parse_dates=[1], infer_datetime_format=True)
 
-    #add the coordinate info to meetings
-    df_meetings = pd.merge(df_meetings, df_locations, how="left", left_on="meet_location", right_on="door_id", sort=False, validate="1:1")
+    # add the coordinate info to meetings
+    df_meetings = pd.merge(df_meetings, df_locations, how="left",
+                           left_on="meet_location", right_on="door_id",
+                           sort=False, validate="1:1")
 
-    #matrix, each row is a pair of coordinates
-    locations = df_meetings[["door_latitude","door_longitude"]].values
-    #add Home coordinates
-    locations = np.concatenate(([[0, 0]], locations), axis=0)
+    # convert the schedule from datetime value to a chronometered value in
+    # minutes starting from the depot at 0, thus first meeting starts at 60
+    # ASSUMPTION: ALL MEETINGS LAST 1 HOUR AND ARE SCHEDULED ACCORDINGLY
+    schedule = df_meetings["meet_time"].values
+    schedule = (schedule - np.min(schedule)).astype("timedelta64[m]")
+    schedule = schedule.astype("int64") + 60
+    schedule = np.concatenate(([0], schedule))
 
+    # matrix, each row is a pair of coordinates
+    location = df_meetings[["door_latitude", "door_longitude"]].values
+    # add Home coordinates
+    location = np.concatenate(([[0, 0]], location), axis=0)
 
-    #maps a node to a door_id
+    # maps a node to a door_id
     node_to_door = df_meetings["meet_location"].values
-    #add the Home node
+    # add the Home node
     node_to_door = np.concatenate(([0], node_to_door))
 
+    # map routes to salesman
+    route_to_salesman = df_salesmen["salesman_name"].values
+
+    # skill is the quality of the salesman, interest is the quality of the meeting
+    # better salesman gets better meeting
+    skill = df_salesmen["salesman_skill"].values
+    interest = df_meetings["meet_interest"].values
+
+    return [location, schedule, skill, interest, node_to_door,
+            route_to_salesman]
 
 
 if __name__ == '__main__':
-    data = import_data()
-    #main()
+    main()

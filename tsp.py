@@ -30,42 +30,6 @@ import numpy as np
 import math
 
 
-def haversine(angle):
-    """trigonometric formula used in distance"""
-    h = math.sin(angle / 2) ** 2
-    return h
-
-
-def earth_distance(lat1, long1, lat2, long2):
-    """ Calculates distance between 2 points on Earth"""
-    # Note: The formula used in this function is not exact, as it assumes
-    # the Earth is a perfect sphere.
-
-    # Mean radius of Earth in meters
-    radius_earth = 6371000
-
-    # Convert latitude and longitude to
-    # spherical coordinates in radians.
-    degrees_to_radians = math.pi / 180.0
-    phi1 = lat1 * degrees_to_radians
-    phi2 = lat2 * degrees_to_radians
-    lambda1 = long1 * degrees_to_radians
-    lambda2 = long2 * degrees_to_radians
-    dphi = phi2 - phi1
-    dlambda = lambda2 - lambda1
-
-    a = haversine(dphi) + math.cos(phi1) * math.cos(phi2) * haversine(dlambda)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    d = radius_earth * c
-    return int(d)
-
-
-def manhattan_distance(x1, y1, x2, y2):
-    """Manhattan distance"""
-    dist = abs(x1 - x2) + abs(y1 - y2)
-    return int(dist)
-
-
 class CreateDistanceCallback(object):
     """Create callback to calculate distances between points."""
 
@@ -86,35 +50,69 @@ class CreateDistanceCallback(object):
                     y1 = locations[from_node][1]
                     x2 = locations[to_node][0]
                     y2 = locations[to_node][1]
-                    self.matrix[from_node][to_node] = earth_distance(x1, y1, x2, y2)
+                    self.matrix[from_node][to_node] = self.earth_distance(x1, y1, x2, y2)
 
     def distance(self, from_node, to_node):
         return int(self.matrix[from_node][to_node])
 
+    def haversine(self, angle):
+        """trigonometric formula used in distance"""
+        h = math.sin(angle / 2) ** 2
+        return h
 
-# Time callback
+    def earth_distance(self, lat1, long1, lat2, long2):
+        """ Calculates distance between 2 points on Earth"""
+        # Note: The formula used in this function is not exact, as it assumes
+        # the Earth is a perfect sphere.
+
+        # Mean radius of Earth in meters
+        radius_earth = 6371000
+
+        # Convert latitude and longitude to
+        # spherical coordinates in radians.
+        degrees_to_radians = math.pi / 180.0
+        phi1 = lat1 * degrees_to_radians
+        phi2 = lat2 * degrees_to_radians
+        lambda1 = long1 * degrees_to_radians
+        lambda2 = long2 * degrees_to_radians
+        dphi = phi2 - phi1
+        dlambda = lambda2 - lambda1
+
+        a = self.haversine(dphi) + math.cos(phi1) * math.cos(phi2) * self.haversine(dlambda)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        d = radius_earth * c
+        return int(d)
+
+    def manhattan_distance(self, x1, y1, x2, y2):
+        """Manhattan distance"""
+        dist = abs(x1 - x2) + abs(y1 - y2)
+        return int(dist)
+
+
 class CreateTimeCallback(object):
     """Create callback to get total times between locations."""
 
     ##the init function is probably useless and I think we just need the time#
-    #we define that all locations (meetings) last 60 minutes
-    def __init__(self):
-        self.matrix = 60
+    #ASSUMPTION: ALL MEETINGS LAST 60 MINUTES
+    def __init__(self, meet_length):
+        self.matrix = meet_length
 
     def time(self, from_node, to_node):
-        return self.matrix
+        return int(self.matrix)
 
 
 def main():
     # import data
-    data = import_data()
+    data = import_data(meet_length=60)
     locations = data[0]
-    schedule = data[1]
+    chronometer = data[1]
     skill = data[2]
     interest = data[3]
     node_to_door = data[4]
     route_to_salesman = data[5]
+    node_to_time = data[6]
 
+    meet_length = 60 #minutes
     num_locations = len(locations)
     num_vehicles = len(route_to_salesman)
 
@@ -135,20 +133,20 @@ def main():
 
         # Put a callback to the time. No argument required since we define
         #that all meetings last for 60 minutes
-        times_at_locations = CreateTimeCallback()
+        times_at_locations = CreateTimeCallback(meet_length)
         times_callback = times_at_locations.time
 
         # Add a dimension for time.
-        time_slack = 15
+        time_slack = int(meet_length / 4)
         time_d_name = "Time"
-        vehicle_capacity = int(max(schedule) + 60)  # the 60 is to return Home
-        routing.AddDimension(times_callback, time_slack, vehicle_capacity, True, time_d_name)
+        total_work_time = int(max(chronometer) + meet_length)  #enough to return Home
+        routing.AddDimension(times_callback, time_slack, total_work_time, True, time_d_name)
 
         #Add the time windows constraint, which is the meeting schedule
         time_dimension = routing.GetDimensionOrDie(time_d_name)
         for location in range(1, num_locations):
-            start = int(schedule[location] - time_slack)
-            end = int(schedule[location] + time_slack)
+            start = int(chronometer[location] - time_slack)
+            end = int(chronometer[location] + time_slack)
             time_dimension.CumulVar(location).SetRange(start, end)
 
         # Solve, displays a solution if any.
@@ -156,14 +154,15 @@ def main():
         if assignment:
             # Display solution.
             # Solution cost.
-            print("Total distance of all routes: " + str(assignment.ObjectiveValue()) + "\n")
+            print("Total distance of all routes: " + str(assignment.ObjectiveValue()))
 
             for vehicle_nbr in range(num_vehicles):
                 index = routing.Start(vehicle_nbr)
                 index_next = assignment.Value(routing.NextVar(index))
-                route = ''
+                route = 'Nodes: '
                 route_dist = 0
-                route_times = ''
+                route_schedule = 'Schedule: '
+                route_door = "Door ID: "
 
                 while not routing.IsEnd(index_next):
                     node_index = routing.IndexToNode(index)
@@ -171,18 +170,24 @@ def main():
                     route += str(node_index) + " -> "
                     # Add the distance to the next node.
                     route_dist += dist_callback(node_index, node_index_next)
-                    # Add time-delayed based schedule
-                    route_times += str(schedule[node_index]) + " -> "
+                    # Add the Door ID
+                    route_door += str(node_to_door[node_index]) + " -> "
+                    # Add the schedule
+                    route_schedule += str(node_to_time[node_index])[:-13] + " -> "
                     index = index_next
                     index_next = assignment.Value(routing.NextVar(index))
 
                 node_index = routing.IndexToNode(index)
                 node_index_next = routing.IndexToNode(index_next)
                 route += str(node_index) + " -> " + str(node_index_next)
-                route_times += str(schedule[node_index]) + " -> " + str(vehicle_capacity)
                 route_dist += dist_callback(node_index, node_index_next)
-                print("Route for Salesman " + str(vehicle_nbr) + ":\n" + route)
-                print(route_times)
+                route_door += str(node_to_door[node_index]) + " -> " + str(node_to_door[node_index_next])
+                route_schedule += str(node_to_time[node_index])[:-13] + " -> " + str(node_to_time[node_index_next])[:-13]
+
+                print("\nRoute for Salesman: " + str(route_to_salesman[vehicle_nbr]))
+                print(route)
+                print(route_door)
+                print(route_schedule)
                 print("Distance of Route " + str(vehicle_nbr) + ": " + str(route_dist))
 
         else:
@@ -191,8 +196,8 @@ def main():
         print('Specify an instance greater than 0.')
 
 
-def import_data():
-    """imports data from specified file"""
+def import_data(meet_length):
+    """imports data; meet_length is the time between each meeting in minutes"""
     df_salesmen = pd.read_csv("tsp-python-import - salesmen.csv")
     df_locations = pd.read_csv("tsp-python-import - locations.csv")
     df_meetings = pd.read_csv("tsp-python-import - meetings.csv",
@@ -205,11 +210,13 @@ def import_data():
 
     # convert the schedule from datetime value to a chronometered value in
     # minutes starting from the depot at 0, thus first meeting starts at 60
-    # ASSUMPTION: ALL MEETINGS LAST 1 HOUR AND ARE SCHEDULED ACCORDINGLY
-    schedule = df_meetings["meet_time"].values
-    schedule = (schedule - np.min(schedule)).astype("timedelta64[m]")
-    schedule = schedule.astype("int64") + 60
-    schedule = np.concatenate(([0], schedule))
+    # ASSUMPTION: ALL MEETINGS LAST THE SAME
+    node_to_time = df_meetings["meet_time"].values
+    #add Home before any meeting
+    home_time = np.min(node_to_time) - np.timedelta64(meet_length, "[m]")
+    node_to_time = np.concatenate(([home_time], node_to_time))
+    chronometer = (node_to_time - home_time).astype("timedelta64[m]")
+    chronometer = chronometer.astype("int64")
 
     # matrix, each row is a pair of coordinates
     location = df_meetings[["door_latitude", "door_longitude"]].values
@@ -229,8 +236,8 @@ def import_data():
     skill = df_salesmen["salesman_skill"].values
     interest = df_meetings["meet_interest"].values
 
-    return [location, schedule, skill, interest, node_to_door,
-            route_to_salesman]
+    return [location, chronometer, skill, interest, node_to_door,
+            route_to_salesman, node_to_time]
 
 
 if __name__ == '__main__':

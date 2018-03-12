@@ -31,29 +31,42 @@ import math
 
 
 class CreateDistanceCallback(object):
-    """Create callback to calculate distances between points."""
+    """Create callback to calculate distances between points, weighted or not."""
 
-    def __init__(self, locations):
-        """Initialize distance array."""
+    def __init__(self, locations, interests, skills, weight_strength=0):
+        """Initialize distance array.
+        If you want the weight, you need to supply all 3 parameters
+        interest, skill, and weight_strength. For quickly switching between
+        raw (unweighted) and weighted distance, just set weight_strength to 0."""
         size = len(locations)
+        num_vehicle = len(skills)
         depot = 0
         self.matrix = {}
+        weight = 1
+        #weight = 1 + (interest * skill) * weight_strength
 
-        for from_node in range(size):
-            self.matrix[from_node] = {}
-            for to_node in range(size):
-                # Define the distance from the depot to any node to be 0.
-                if from_node == depot or to_node == depot:
-                    self.matrix[from_node][to_node] = 0
-                else:
-                    x1 = locations[from_node][0]
-                    y1 = locations[from_node][1]
-                    x2 = locations[to_node][0]
-                    y2 = locations[to_node][1]
-                    self.matrix[from_node][to_node] = self.earth_distance(x1, y1, x2, y2)
+        for vehicle in range(num_vehicle):
+            self.matrix[vehicle] = {}
+            for from_node in range(size):
+                self.matrix[vehicle][from_node] = {}
+                for to_node in range(size):
+                    self.matrix[vehicle][from_node][to_node] = {}
+                    # Define the distance from the depot to any node to be 0.
+                    if from_node == depot or to_node == depot:
+                        self.matrix[vehicle][from_node][to_node] = 0
+                    else:
+                        x1 = locations[from_node][0]
+                        y1 = locations[from_node][1]
+                        x2 = locations[to_node][0]
+                        y2 = locations[to_node][1]
+                        self.matrix[vehicle][from_node][to_node] = int(self.earth_distance(x1, y1, x2, y2))
+
 
     def distance(self, from_node, to_node):
-        return int(self.matrix[from_node][to_node])
+        return self.matrix[0][from_node][to_node]
+
+    def distance_v(self, vehicle):
+        return lambda from_node, to_node: self.matrix[vehicle][from_node][to_node]
 
     def haversine(self, angle):
         """trigonometric formula used in distance"""
@@ -81,24 +94,23 @@ class CreateDistanceCallback(object):
         a = self.haversine(dphi) + math.cos(phi1) * math.cos(phi2) * self.haversine(dlambda)
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         d = radius_earth * c
-        return int(d)
+        return d
 
     def manhattan_distance(self, x1, y1, x2, y2):
         """Manhattan distance"""
         dist = abs(x1 - x2) + abs(y1 - y2)
-        return int(dist)
+        return dist
 
 
 class CreateTimeCallback(object):
     """Create callback to get total times between locations."""
 
-    ##the init function is probably useless and I think we just need the time#
-    #ASSUMPTION: ALL MEETINGS LAST 60 MINUTES
+    #ASSUMPTION: all meetings last the same (in minutes)
     def __init__(self, meet_length):
-        self.matrix = meet_length
+        self.time_matrix = int(meet_length)
 
     def time(self, from_node, to_node):
-        return int(self.matrix)
+        return self.time_matrix
 
 
 def main():
@@ -106,15 +118,15 @@ def main():
     data = import_data(meet_length=60)
     locations = data[0]
     chronometer = data[1]
-    skill = data[2]
-    interest = data[3]
+    skills = data[2]
+    interests = data[3]
     node_to_door = data[4]
     route_to_salesman = data[5]
     node_to_time = data[6]
 
     meet_length = 60 #minutes
     num_locations = len(locations)
-    num_vehicles = len(route_to_salesman)
+    num_vehicles = len(skills)
 
     # depot is Home, the start point of each route for first meeting and end
     # point after last meeting, it is defined as distance 0 to any other node
@@ -127,12 +139,18 @@ def main():
         search_parameters = pywrapcp.RoutingModel.DefaultSearchParameters()
 
         # Callback to the distance function.
-        dist_between_locations = CreateDistanceCallback(locations)
-        dist_callback = dist_between_locations.distance
-        routing.SetArcCostEvaluatorOfAllVehicles(dist_callback)
+        dist_between_locations = CreateDistanceCallback(locations, interests, skills)
 
-        # Put a callback to the time. No argument required since we define
-        #that all meetings last for 60 minutes
+        #adding the cost function for each vehicle seperately since each
+        #salesman has a different skill that we will optimize for
+        dist_callbacks = []
+        for vehicle in range(num_vehicles):
+            dist_callbacks.append(dist_between_locations.distance_v(vehicle))
+
+        for vehicle in range(num_vehicles):
+            routing.SetArcCostEvaluatorOfVehicle(dist_callbacks[vehicle], vehicle)
+
+        # Put a callback to the time.
         times_at_locations = CreateTimeCallback(meet_length)
         times_callback = times_at_locations.time
 
@@ -169,20 +187,20 @@ def main():
                     node_index_next = routing.IndexToNode(index_next)
                     route += str(node_index) + " -> "
                     # Add the distance to the next node.
-                    route_dist += dist_callback(node_index, node_index_next)
+                    route_dist += dist_callbacks[vehicle_nbr](node_index, node_index_next)
                     # Add the Door ID
                     route_door += str(node_to_door[node_index]) + " -> "
                     # Add the schedule
-                    route_schedule += str(node_to_time[node_index])[:-13] + " -> "
+                    route_schedule += str(node_to_time[node_index])[11:-13] + " -> "
                     index = index_next
                     index_next = assignment.Value(routing.NextVar(index))
 
                 node_index = routing.IndexToNode(index)
                 node_index_next = routing.IndexToNode(index_next)
                 route += str(node_index) + " -> " + str(node_index_next)
-                route_dist += dist_callback(node_index, node_index_next)
+                route_dist += dist_callbacks[vehicle_nbr](node_index, node_index_next)
                 route_door += str(node_to_door[node_index]) + " -> " + str(node_to_door[node_index_next])
-                route_schedule += str(node_to_time[node_index])[:-13] + " -> " + str(node_to_time[node_index_next])[:-13]
+                route_schedule += str(node_to_time[node_index])[11:-13] + " -> " + str(node_to_time[node_index_next])[11:-13]
 
                 print("\nRoute for Salesman: " + str(route_to_salesman[vehicle_nbr]))
                 print(route)
@@ -235,6 +253,8 @@ def import_data(meet_length):
     # better salesman gets better meeting
     skill = df_salesmen["salesman_skill"].values
     interest = df_meetings["meet_interest"].values
+    #add Home interest
+    interest = np.concatenate(([0], interest))
 
     return [location, chronometer, skill, interest, node_to_door,
             route_to_salesman, node_to_time]

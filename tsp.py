@@ -42,15 +42,13 @@ class CreateDistanceCallback(object):
         num_vehicle = len(skills)
         depot = 0
         self.matrix = {}
-        weight = 1
-        #weight = 1 + (interest * skill) * weight_strength
-
         for vehicle in range(num_vehicle):
             self.matrix[vehicle] = {}
             for from_node in range(size):
                 self.matrix[vehicle][from_node] = {}
                 for to_node in range(size):
                     self.matrix[vehicle][from_node][to_node] = {}
+                    weight = 1 + weight_strength * abs(interests[to_node] - skills[vehicle])
                     # Define the distance from the depot to any node to be 0.
                     if from_node == depot or to_node == depot:
                         self.matrix[vehicle][from_node][to_node] = 0
@@ -59,7 +57,7 @@ class CreateDistanceCallback(object):
                         y1 = locations[from_node][1]
                         x2 = locations[to_node][0]
                         y2 = locations[to_node][1]
-                        self.matrix[vehicle][from_node][to_node] = int(self.earth_distance(x1, y1, x2, y2))
+                        self.matrix[vehicle][from_node][to_node] = int(self.earth_distance(x1, y1, x2, y2) * weight)
 
 
     def distance(self, from_node, to_node):
@@ -139,7 +137,7 @@ def main():
         search_parameters = pywrapcp.RoutingModel.DefaultSearchParameters()
 
         # Callback to the distance function.
-        dist_between_locations = CreateDistanceCallback(locations, interests, skills)
+        dist_between_locations = CreateDistanceCallback(locations, interests, skills, weight_strength=2)
 
         #adding the cost function for each vehicle seperately since each
         #salesman has a different skill that we will optimize for
@@ -172,7 +170,7 @@ def main():
         if assignment:
             # Display solution.
             # Solution cost.
-            print("Total distance of all routes: " + str(assignment.ObjectiveValue()))
+            print("Total (weighted) distance of all routes: " + str(assignment.ObjectiveValue()))
 
             for vehicle_nbr in range(num_vehicles):
                 index = routing.Start(vehicle_nbr)
@@ -181,6 +179,8 @@ def main():
                 route_dist = 0
                 route_schedule = 'Schedule: '
                 route_door = "Door ID: "
+                route_interest = "Meet Quality:"
+                total_interest = 0
 
                 while not routing.IsEnd(index_next):
                     node_index = routing.IndexToNode(index)
@@ -192,8 +192,10 @@ def main():
                     route_door += str(node_to_door[node_index]) + " -> "
                     # Add the schedule
                     route_schedule += str(node_to_time[node_index])[11:-13] + " -> "
+                    route_interest += str(interests[node_index]) + " -> "
                     index = index_next
                     index_next = assignment.Value(routing.NextVar(index))
+                    total_interest += interests[node_index]
 
                 node_index = routing.IndexToNode(index)
                 node_index_next = routing.IndexToNode(index_next)
@@ -201,12 +203,16 @@ def main():
                 route_dist += dist_callbacks[vehicle_nbr](node_index, node_index_next)
                 route_door += str(node_to_door[node_index]) + " -> " + str(node_to_door[node_index_next])
                 route_schedule += str(node_to_time[node_index])[11:-13] + " -> " + str(node_to_time[node_index_next])[11:-13]
+                route_interest += str(interests[node_index]) + " -> " + str(interests[node_index_next])
+                total_interest += interests[node_index]
 
-                print("\nRoute for Salesman: " + str(route_to_salesman[vehicle_nbr]))
+                print("\nRoute for Salesman: " + str(route_to_salesman[vehicle_nbr]) + "(skill=" + str(skills[vehicle_nbr]) + ")")
                 print(route)
+                print(route_interest)
                 print(route_door)
                 print(route_schedule)
-                print("Distance of Route " + str(vehicle_nbr) + ": " + str(route_dist))
+                print("Weighted Distance of Route " + str(vehicle_nbr) + ": " + str(route_dist))
+                print("Total Quality serviced: " + str(total_interest))
 
         else:
             print('No solution found.')

@@ -1,7 +1,7 @@
-salesman_id,salesman_skill,salesman_name
-201,0.1,Ben
-202,0.9,Alex
-203,0.5,Ariane
-204,0.4,Martine
-205,0.9,Mike
-206,1.0,Sleiman
+salesman_id,salesman_skill,salesman_name,start_location
+201,0.1,Ben,1088
+202,0.9,Alex,1091
+203,0.5,Ariane,1056
+204,0.4,Martine,1064
+205,0.9,Mike,1078
+206,1.0,Sleiman,1074

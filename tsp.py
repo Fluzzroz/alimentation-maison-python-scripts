@@ -31,18 +31,30 @@ import math
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--meet_length', default = 60, type = int, help='Length of time between two consecutive meetings in minutes.')
-parser.add_argument('--weight_strength', default = 2, type = int, help='How much should Skills & Interests affect the routes. Put 0 for no effect, in which case raw distance will be calculated.')
+parser.add_argument('--meet_length', default=60, type=int,
+                    help='Length of time between two consecutive meetings in '
+                         'minutes.')
+parser.add_argument('--use_default_start', default=1, type=bool,
+                    help='If True, the import will not read the start '
+                         'locations. Useful if you do not supply them at all. '
+                         'The default Start is Home. If False, then you need '
+                         'to supply locations.')
+parser.add_argument('--weight_strength', default=2, type=int,
+                    help='How much should Skills & Interests affect the '
+                         'routes. Put 0 for no effect, in which case the raw'
+                         ' distance will be optimized.')
 
 
 class CreateDistanceCallback(object):
-    """Create callback to calculate distances between points, weighted or not."""
+    """Create callback to calculate distances between points, weighted or not.
+    The weights create a preference for assigning the same meeting quality to
+    the same salesman skill. So better better meetings will be favored towards
+    better salesmen, and bad meetings towards bad salesman. While the distance
+    is what's being optimized, you can control how strongly this favoritism is
+     applied via the 'weight_strength' parameter."""
 
     def __init__(self, locations, interests, skills, weight_strength):
-        """Initialize distance array.
-        If you want the weight, you need to supply all 3 parameters
-        interest, skill, and weight_strength. For quickly switching between
-        raw (unweighted) and weighted distance, just set weight_strength to 0."""
+        """Initialize distance array."""
         size = len(locations)
         num_vehicle = len(skills)
         self.matrix = {}
@@ -59,16 +71,18 @@ class CreateDistanceCallback(object):
                     y2 = locations[to_node][1]
 
                     # Define the distance from the depot to any node to be 0.
-                    # The depot location is defined by Door ID 0, location = [0,0]
+                    # The depot location is defined by Door ID 0, coords=[0,0]
                     if x1 == 0 or x2 == 0:
                         self.matrix[vehicle][from_node][to_node] = 0
                     else:
                         self.matrix[vehicle][from_node][to_node] = int(self.earth_distance(x1, y1, x2, y2) * weight)
 
     def distance(self, from_node, to_node):
+        """regular distance function; returns the distance between 2 nodes"""
         return self.matrix[0][from_node][to_node]
 
     def distance_v(self, vehicle):
+        """creates a distance function appropriate for the vehicle"""
         return lambda from_node, to_node: self.matrix[vehicle][from_node][to_node]
 
     def haversine(self, angle):
@@ -108,7 +122,7 @@ class CreateDistanceCallback(object):
 class CreateTimeCallback(object):
     """Create callback to get total times between locations."""
 
-    #ASSUMPTION: all meetings last the same (in minutes)
+    # ASSUMPTION: all meetings last the same (in minutes)
     def __init__(self, meet_length):
         self.time_matrix = int(meet_length)
 
@@ -116,79 +130,89 @@ class CreateTimeCallback(object):
         return self.time_matrix
 
 
-def import_data(meet_length):
+def import_data(meet_length, use_default_start):
     """imports data; meet_length is the time between each meeting in minutes"""
     df_salesmen = pd.read_csv("tsp-python-import - salesmen.csv")
     df_locations = pd.read_csv("tsp-python-import - locations.csv")
     df_meetings = pd.read_csv("tsp-python-import - meetings.csv",
                               parse_dates=[1], infer_datetime_format=True)
 
+    route_to_salesman = df_salesmen["salesman_name"].values
+    skill = df_salesmen["salesman_skill"].values
+
+    # Salesmen start and end locations. End is always Home, which means that it
+    #  does not constrain the route. The default start is Home.
+    end_locations = np.zeros(shape=skill.shape, dtype="int64")
+    if use_default_start:
+        start_locations = end_locations
+    else:
+        # the input expected is a Door ID. 0 for Home.
+        start_locations = df_salesmen["start_location"].values
+
+    start_time = df_meetings["meet_time"].min() - np.timedelta64(meet_length, "[m]")
+
+    # Add the required starting nodes to the list, including the depot,
+    df_start = pd.DataFrame({"meet_location": np.concatenate(([0], start_locations)), "meet_interest": 0, "meet_time": start_time})
+    df_meetings = pd.concat([df_start, df_meetings])
+
     # add the coordinate info to meetings
     df_meetings = pd.merge(df_meetings, df_locations, how="left",
                            left_on="meet_location", right_on="door_id",
                            sort=False, validate="m:1")
 
-    # convert the schedule from datetime value to a chronometered value in
-    # minutes starting from the depot at 0, thus first meeting starts at 60
-    # ASSUMPTION: ALL MEETINGS LAST THE SAME
-    node_to_time = df_meetings["meet_time"].values
-    # add Home before any meeting
-    home_time = np.min(node_to_time) - np.timedelta64(meet_length, "[m]")
-    node_to_time = np.concatenate(([home_time], node_to_time))
-    chronometer = (node_to_time - home_time).astype("timedelta64[m]")
-    chronometer = chronometer.astype("int64")
+    interest = df_meetings["meet_interest"].values
 
-    # matrix, each row is a pair of coordinates
+    # convert the schedule from datetime value to a chronometered value in
+    # minutes starting from the start position at 0, thus the first meetings
+    # on the route starts at 60
+    # ASSUMPTION: ALL MEETINGS LAST THE SAME
+    node_to_time = df_meetings["meet_time"]
+    chronometer = (node_to_time - start_time).astype("timedelta64[m]")
+    chronometer = chronometer.values.astype("int64")
+    node_to_time = node_to_time.values
+
+    # location matrix, each row is a pair of coordinates
     location = df_meetings[["door_latitude", "door_longitude"]].values
-    # add Home coordinates
-    location = np.concatenate(([[0, 0]], location), axis=0)
 
     # maps a node to a door_id
     node_to_door = df_meetings["meet_location"].values
-    # add the Home node
-    node_to_door = np.concatenate(([0], node_to_door))
-
-    # map routes to salesman
-    route_to_salesman = df_salesmen["salesman_name"].values
-
-    # skill is the quality of the salesman, interest is the quality of the meeting
-    # better salesman gets better meeting
-    skill = df_salesmen["salesman_skill"].values
-    interest = df_meetings["meet_interest"].values
-    # add Home interest
-    interest = np.concatenate(([0], interest))
 
     return [location, chronometer, skill, interest, node_to_door,
             route_to_salesman, node_to_time]
 
 
 def main(args):
-    # import data
-    data = import_data(args.meet_length)
-    locations = data[0]
-    chronometer = data[1]
-    skills = data[2]
-    interests = data[3]
-    node_to_door = data[4]
-    route_to_salesman = data[5]
-    node_to_time = data[6]
+    # unpack arguments
+    meet_length = args.meet_length
+    use_default_start = args.use_default_start
+    weight_strength = args.weight_strength
 
-    meet_length = 60 #minutes
+    #import data
+    data = import_data(meet_length, use_default_start)
+    locations = data[0] # all the nodes + depot(Home) + start locations
+    chronometer = data[1] # time in minutes from 0 at start to meeting time
+    skills = data[2] # salesman's talent, will influence his weighted route
+    interests = data[3] # meeting quality, will influence weighted routes
+    node_to_door = data[4] # map of node numbers to door_id
+    route_to_salesman = data[5] # map of route numbers to salesman name
+    node_to_time = data[6] # map of node number to meeting time(in Time format)
+
     num_locations = len(locations)
     num_vehicles = len(skills)
-
-    # depot is Home, the start point of each route for first meeting and end
-    # point after last meeting, it is defined as distance 0 to any other node
-    # In other words, Home is the salesman Home, as in: he is off the clock
-    depot = 0
+    start_nodes = list(range(1, num_vehicles +1)) # starting node of each salesman
+    end_nodes = [0]*num_vehicles # ending node of each salesman, always set to 0
 
     # Create routing model.
     if num_locations > 0:
-        routing = pywrapcp.RoutingModel(num_locations, num_vehicles, depot)
+        routing = pywrapcp.RoutingModel(num_locations, num_vehicles, start_nodes, end_nodes)
         search_parameters = pywrapcp.RoutingModel.DefaultSearchParameters()
+        # the GUIDED_LOCAL_SEARCH improves search result, but will never
+        # converge. It will stop after the time limit set below
+        #search_parameters.local_search_metaheuristic = (routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+        search_parameters.time_limit_ms = 30000
 
         # Callback to the distance function.
-        dist_between_locations = CreateDistanceCallback(locations, interests, skills, args.weight_strength)
+        dist_between_locations = CreateDistanceCallback(locations, interests, skills, weight_strength)
 
         # adding the cost function for each vehicle seperately since each
         # salesman has a different skill that we will optimize for
@@ -206,13 +230,15 @@ def main(args):
 
         # Add a dimension for time.
         time_slack = int(meet_length / 4)
+        time_slack = 0
         time_d_name = "Time"
         total_work_time = int(max(chronometer) + meet_length)  #enough to return Home
-        routing.AddDimension(times_callback, time_slack, total_work_time, True, time_d_name)
+        routing.AddDimension(times_callback, total_work_time, total_work_time, True, time_d_name)
 
-        # Add the time windows constraint, which is the meeting schedule
+        # # Add the time windows constraint, which is the meeting schedule
         time_dimension = routing.GetDimensionOrDie(time_d_name)
-        for location in range(1, num_locations):
+
+        for location in range(num_vehicles + 1, num_locations):
             start = int(chronometer[location] - time_slack)
             end = int(chronometer[location] + time_slack)
             time_dimension.CumulVar(location).SetRange(start, end)
@@ -227,11 +253,11 @@ def main(args):
             for vehicle_nbr in range(num_vehicles):
                 index = routing.Start(vehicle_nbr)
                 index_next = assignment.Value(routing.NextVar(index))
-                route = 'Nodes: '
+                route = "Nodes: "
                 route_dist = 0
-                route_schedule = 'Schedule: '
                 route_door = "Door ID: "
-                route_interest = "Meet Quality:"
+                route_schedule = "Schedule: "
+                route_interest = "Meet Quality: "
                 total_interest = 0
                 route_arc = "Arc cost: "
 
@@ -263,13 +289,12 @@ def main(args):
 
                 print("\nRoute for Salesman: " + str(route_to_salesman[vehicle_nbr]) + "(skill=" + str(skills[vehicle_nbr]) + ")")
                 print(route)
-                print(route_interest)
                 print(route_door)
+                print(route_interest)
                 print(route_arc)
                 print(route_schedule)
                 print("Weighted Distance of Route " + str(vehicle_nbr) + ": " + str(route_dist))
                 print("Total Quality serviced: " + str(total_interest))
-
         else:
             print('No solution found.')
     else:
@@ -278,6 +303,9 @@ def main(args):
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    args.weight_strength = 0
+
     args.meet_length = 60
+    args.use_default_start = 0
+    args.weight_strength = 1
+
     main(args)

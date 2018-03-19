@@ -140,11 +140,10 @@ def import_data(meet_length, use_default_start):
     route_to_salesman = df_salesmen["salesman_name"].values
     skill = df_salesmen["salesman_skill"].values
 
-    # Salesmen start and end locations. End is always Home, which means that it
+    # Salesmen start locations. End is always Home, which means that it
     #  does not constrain the route. The default start is Home.
-    end_locations = np.zeros(shape=skill.shape, dtype="int64")
     if use_default_start:
-        start_locations = end_locations
+        start_locations = np.zeros(shape=skill.shape, dtype="int64")
     else:
         # the input expected is a Door ID. 0 for Home.
         start_locations = df_salesmen["start_location"].values
@@ -152,8 +151,9 @@ def import_data(meet_length, use_default_start):
     start_time = df_meetings["meet_time"].min() - np.timedelta64(meet_length, "[m]")
 
     # Add the required starting nodes to the list, including the depot,
-    df_start = pd.DataFrame({"meet_location": np.concatenate(([0], start_locations)), "meet_interest": 0, "meet_time": start_time})
-    df_meetings = pd.concat([df_start, df_meetings])
+    df_depot = pd.DataFrame({"meet_location": [0], "meet_interest": 0, "meet_time": start_time})
+    df_start = pd.DataFrame({"meet_location": start_locations, "meet_interest": 0, "meet_time": start_time})
+    df_meetings = pd.concat([df_depot, df_start, df_meetings])
 
     # add the coordinate info to meetings
     df_meetings = pd.merge(df_meetings, df_locations, how="left",
@@ -199,7 +199,7 @@ def main(args):
 
     num_locations = len(locations)
     num_vehicles = len(skills)
-    start_nodes = list(range(1, num_vehicles +1)) # starting node of each salesman
+    start_nodes = list(range(1, num_vehicles + 1)) # starting node of each salesman
     end_nodes = [0]*num_vehicles # ending node of each salesman, always set to 0
 
     # Create routing model.
@@ -223,24 +223,17 @@ def main(args):
         for vehicle in range(num_vehicles):
             routing.SetArcCostEvaluatorOfVehicle(dist_callbacks[vehicle], vehicle)
 
-
-        # Put a callback to the time.
-        times_at_locations = CreateTimeCallback(meet_length)
-        times_callback = times_at_locations.time
-
         # Add a dimension for time.
-        time_slack = int(meet_length / 4)
-        time_slack = 0
         time_d_name = "Time"
-        total_work_time = int(max(chronometer) + meet_length)  #enough to return Home
-        routing.AddDimension(times_callback, total_work_time, total_work_time, True, time_d_name)
+        total_work_time = int(max(chronometer) + 2 * meet_length)  #enough to return Home
+        routing.AddConstantDimension(meet_length, total_work_time, True, time_d_name)
 
         # # Add the time windows constraint, which is the meeting schedule
         time_dimension = routing.GetDimensionOrDie(time_d_name)
 
         for location in range(num_vehicles + 1, num_locations):
-            start = int(chronometer[location] - time_slack)
-            end = int(chronometer[location] + time_slack)
+            start = int(chronometer[location])
+            end = start
             time_dimension.CumulVar(location).SetRange(start, end)
 
         # Solve, displays a solution if any.
@@ -290,11 +283,18 @@ def main(args):
                 print("\nRoute for Salesman: " + str(route_to_salesman[vehicle_nbr]) + "(skill=" + str(skills[vehicle_nbr]) + ")")
                 print(route)
                 print(route_door)
+                print(route_schedule)
                 print(route_interest)
                 print(route_arc)
-                print(route_schedule)
                 print("Weighted Distance of Route " + str(vehicle_nbr) + ": " + str(route_dist))
                 print("Total Quality serviced: " + str(total_interest))
+
+            for i in range(num_locations):
+                time_var = routing.CumulVar(i, time_d_name)
+                print(time_var)
+
+            print("Depot:", routing.GetDepot())
+
         else:
             print('No solution found.')
     else:

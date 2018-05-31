@@ -164,7 +164,8 @@ def import_data(meet_length):
 
 def main(args):
     # import data
-    data = import_data(args.meet_length)
+    meet_length = args.meet_length
+    data = import_data(meet_length)
     locations = data[0]
     chronometer = data[1]
     skills = data[2]
@@ -173,7 +174,6 @@ def main(args):
     route_to_salesman = data[5]
     node_to_time = data[6]
 
-    meet_length = 60 #minutes
     num_locations = len(locations)
     num_vehicles = len(skills)
 
@@ -278,6 +278,6 @@ def main(args):
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    args.weight_strength = 0
+    args.weight_strength = 1
     args.meet_length = 60
     main(args)
